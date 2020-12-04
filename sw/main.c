@@ -83,6 +83,7 @@ void decrypt (uint32_t v[2], const uint32_t k[4]) {
     v[0]=v0; v[1]=v1;
 }
 
+// TEST3
 void unsigned_divide(unsigned int dividend,
 		     unsigned int divisor,
 		     unsigned int *quotient,
@@ -333,9 +334,10 @@ void u32toa(uint32_t value, char* buffer) {
 
 int main(){
     int r = -1;
+ 
  #ifdef TEST1   
     FLAG_UP;
-    r=fact(10);
+    r=fact(10)+fact(12);
     FLAG_UP;
     printf("%d\n", r);
 #endif
@@ -351,10 +353,12 @@ int main(){
 #endif
 
 #ifdef TEST3
-    int q;
+    int q, sum =0;
     FLAG_UP;
     unsigned_divide(3907632, 304, &q, &r);
-    r = r + q;
+    sum += (r + q);
+    unsigned_divide(1234567890, 13, &q, &r);
+    sum += (r + q);
     FLAG_UP;
     printf("%d\n", r);
 #endif
@@ -387,7 +391,7 @@ int main(){
     FLAG_UP;
     int sum = 0;
     for(int i=0; i<100; i++)
-      sum += mul(i,13);
+      sum += mul(i,34589);
     FLAG_UP;
     r = sum;
     printf("%d\n", r);

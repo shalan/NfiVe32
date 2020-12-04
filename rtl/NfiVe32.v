@@ -39,7 +39,6 @@
 		- [X] Bus wait states
 		- [X] Some Performance counters (CYCLE and INSTRET)
 		- [X] Systick timer
-		- [] Extensions (SPM and Division) - will add around 3.5K ASIC cells 
 		- [] Wait for Interrupt Instruction (wfi)
 		- [] Comprehensive testing
 		- [X] Add a latch based Register File

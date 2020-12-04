@@ -1,6 +1,7 @@
 # to run: ./test.sh 2> /dev/null
 tests=(TEST1 TEST2 TEST3 TEST4 TEST5 TEST6 TEST7 TEST8 TEST9 TEST10 TEST11 TEST12)
 #tests=(TEST1)
+rm *.vcd
 for i in "${tests[@]}"
 do
    echo "$i is running!"
