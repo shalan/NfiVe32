@@ -10,26 +10,27 @@ reg HCLK, HRESETn;
 
 wire [3:0]		  fdi;
 wire [3:0]    	fdo;
-wire     	fdoe;
+wire     	      fdoe;
 wire          	fsclk;
 wire          	fcen;
 
-wire             HSEL_FLASH, HSEL_SRAM, HSEL_DBG;
-wire             HREADY;
-wire     [1:0]   HTRANS;
-wire     [2:0]   HSIZE;
-wire             HWRITE;
-wire     [31:0]  HADDR;
-wire             HREADYOUT, HREADYOUT_FLASH, HREADYOUT_SRAM;
-wire     [31:0]  HRDATA, HRDATA_FLASH, HRDATA_SRAM;
-wire 	  [31:0]	 HWDATA;
+wire            HSEL_FLASH, HSEL_SRAM, HSEL_DBG;
+wire            HREADY;
+wire [1:0]      HTRANS;
+wire [2:0]      HSIZE;
+wire            HWRITE;
+wire [31:0]     HADDR;
+wire            HREADYOUT, HREADYOUT_FLASH, HREADYOUT_SRAM;
+wire [31:0]     HRDATA, HRDATA_FLASH, HRDATA_SRAM;
+wire [31:0]	    HWDATA;
 
-//QSPIXIP qspi
+
 QSPI_XIP_CTRL qspi (
     // Global Signals
     .HCLK(HCLK),
     .HRESETn(HRESETn),
 
+    // QSPI flash interface
     .din(fdi),
     .dout(fdo),
     .douten(fdoe),
@@ -48,7 +49,6 @@ QSPI_XIP_CTRL qspi (
 );
 
 
-
 AHB2MEM SRAM
 (
     .HCLK(HCLK),
@@ -63,8 +63,7 @@ AHB2MEM SRAM
     .HRDATA(HRDATA_SRAM),
     .HWDATA(HWDATA)
     );
-//assign HSEL = 1;
-//assign HREADY = HREADYOUT;
+
 
 
 assign HSEL_FLASH=(HADDR[31:24] == 8'h00);
@@ -93,40 +92,11 @@ wire flag = HREADY & HSEL_DBG & HTRANS[1];//(HRDATA == 32'hDEADBEEF);
 wire [3:0] fdio = fdoe ? fdo : 4'bzzzz;
 assign fdi = fdio;
 
-sst26wf080b flash(.SCK(fsclk),.SIO(fdio),.CEb(fcen));
-/*
-CORTEXM0DS CM0(
-    // CLOCK AND RESETS ------------------
-    .HCLK(HCLK),
-    .HRESETn(HRESETn),
-
-    // AHB-LITE MASTER PORT --------------
-    .HADDR(HADDR),             // AHB transaction address
-    .HBURST(),            // AHB burst: tied to single
-    .HMASTLOCK(),         // AHB locked transfer (always zero)
-    .HPROT(),             // AHB protection: priv; data or inst
-    .HSIZE(HSIZE),        // AHB size: byte, half-word or word
-    .HTRANS(HTRANS),      // AHB transfer: non-sequential only
-    .HWDATA(HWDATA),            // AHB write-data
-    .HWRITE(HWRITE),            // AHB write control
-    .HRDATA(HRDATA),      // AHB read-data
-    .HREADY(HREADY),      // AHB stall signal
-    .HRESP(1'b0),        // AHB error response
-
-    // MISCELLANEOUS ---------------------
-    .NMI(1'b0),               // Non-maskable interrupt input
-    .IRQ(0),               // Interrupt request inputs
-    .TXEV(),              // Event output (SEV executed)
-    .RXEV(0),              // Event input
-    .LOCKUP(),            // Core is locked-up
-    .SYSRESETREQ(),       // System reset request
-    .STCLKEN(1'b0),           // SysTick SCLK clock enable
-    .STCALIB(26'b0),           // SysTick calibration register value
-
-    // POWER MANAGEMENT ------------------
-    .SLEEPING()           // Core and NVIC sleeping
+sst26wf080b flash(
+  .SCK(fsclk),
+  .SIO(fdio),
+  .CEb(fcen)
 );
-*/
 
 NfiVe32 N5_32(
 	.HCLK(HCLK),
@@ -150,6 +120,7 @@ NfiVe32 N5_32(
 
 
 
+// Clock and Rest Generation
 initial begin
     //Inputs initialization
     HCLK = 0;
@@ -163,6 +134,7 @@ end
 
 always #5 HCLK = ~ HCLK;
 
+// Dump file
 initial begin
     $dumpfile("n5_tb.vcd");
     $dumpvars(`SIM_LEVEL, n5_tb);
@@ -170,15 +142,15 @@ initial begin
     $finish;
 end
 
+// Terminate the smulation with ebreak instruction.
+// Calculate the CPI using the CSRs
 always @ (posedge HCLK) 
     if(N5_32.instr_ebreak) begin
       $display("CPI=%d.%0d", N5_32.CSR_CYCLE/N5_32.CSR_INSTRET,(N5_32.CSR_CYCLE%N5_32.CSR_INSTRET)*10/N5_32.CSR_INSTRET );
       $finish;
     end
 
-
-
-
+// Monitor Flash memory reads
 always @(posedge HCLK)
     if(HTRANS[1] & HREADY & HSEL_FLASH)
       $display("Flash Read A:%X (%0t)", HADDR, $time);
@@ -191,8 +163,8 @@ end
 endmodule
 
 
-module AHB2MEM
-#(parameter MEMWIDTH = 16)					// SIZE = 64KB = 8 KWords
+// 64KB Synchronous SRAM with AHB-Lite Slave Interface
+module AHB2MEM #(parameter MEMWIDTH = 16)					// SIZE = 64KB = 8 KWords
 (
 	//AHBLITE INTERFACE
 		//Slave Select Signals
@@ -206,7 +178,6 @@ module AHB2MEM
 			input wire [1:0] HTRANS,
 			input wire HWRITE,
 			input wire [2:0] HSIZE,
-			
 			input wire [31:0] HWDATA,
 		// Transfer Response & Read Data
 			output wire HREADYOUT,
@@ -227,29 +198,22 @@ module AHB2MEM
 // Memory Array  
   reg [31:0] memory[0:(2**(MEMWIDTH-2)-1)];
   
-  initial
-  begin
-	//$readmemh("../Software/code.hex", memory);
-  end
-
 // Sample the Address Phase   
   always @(posedge HCLK or negedge HRESETn)
   begin
-	 if(!HRESETn)
-	 begin
-		APhase_HSEL <= 1'b0;
+    if(!HRESETn) begin
+      APhase_HSEL <= 1'b0;
       APhase_HWRITE <= 1'b0;
       APhase_HTRANS <= 2'b00;
-		APhase_HADDR <= 32'h0;
-		APhase_HSIZE <= 3'b000;
-	 end
-    else if(HREADY)
-    begin
+      APhase_HADDR <= 32'h0;
+      APhase_HSIZE <= 3'b000;
+    end
+    else if(HREADY) begin
       APhase_HSEL <= HSEL;
       APhase_HWRITE <= HWRITE;
       APhase_HTRANS <= HTRANS;
-		APhase_HADDR <= HADDR;
-		APhase_HSIZE <= HSIZE;
+      APhase_HADDR <= HADDR;
+      APhase_HSIZE <= HSIZE;
     end
   end
 
@@ -291,21 +255,11 @@ module AHB2MEM
 			memory[APhase_HADDR[MEMWIDTH:2]][31:24] <= HWDATA[31:24];
 	  end
   end
-/*
-// Reading from memory 
-// The first 2 words must be known @ Boot Time   
-  wire [31:0] mem_word_0 = 32'h0;       // SP
-  wire [31:0] mem_word_1 = 32'h0;       // RESET Vector -- Should point to External Flash
-  assign HRDATA =   (APhase_HADDR[MEMWIDTH:2]==30'h0) ? mem_word_0 :
-                    (APhase_HADDR[MEMWIDTH:2]==30'h1) ? mem_word_1 :
-                    memory[APhase_HADDR[MEMWIDTH:2]];
- */
+
   assign HRDATA =   memory[APhase_HADDR[MEMWIDTH:2]];
 
   always @(posedge HCLK)
 	  if(APhase_HSEL & ~APhase_HWRITE & APhase_HTRANS[1])
       $display("Read from SRAM: [%x]=%x (%0t)", APhase_HADDR, HRDATA, $time); 
-// Diagnostic Signal out
-//  assign LED = memory[0][7:0];
   
 endmodule
