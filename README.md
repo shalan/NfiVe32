@@ -1,4 +1,4 @@
-# NFive32
+# NfiVe32
 Area Optimized RV32IC CPU core with a single AHB-Lite master Interface for Data and Instructions. It has the following features:
 - Target clock frequency > 100MHz in 130nm technologies
 - Average CPI ~ 4.0 (executing directly from external quad i/o SPI flash)
