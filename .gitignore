@@ -1,0 +1,9 @@
+*.vvp
+*.hex
+*.list
+*.elf
+*.exe
+*.vcd
+*.log
+/pdk/*
+.DS_Store
