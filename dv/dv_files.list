@@ -1,0 +1,10 @@
+n5_tb.v 
+sst26wf080b.v 
+
+# change these to point to the library cell models
+../pdk/hd_functional.v 
+../pdk/hd_primitives.v
+
+../rtl/QSPI_XIP_CTRL.v  
+../rtl/DFFRFile.v 
+../rtl/NfiVe32.v 
