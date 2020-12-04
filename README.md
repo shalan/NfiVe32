@@ -15,6 +15,7 @@ Area Optimized RV32IC CPU core with a single AHB-Lite master Interface for Data 
 
 ## NfiVe32 Interfacing
 <img src=docs/n5_interface.png>
+
 ## Directory Structure
 - `./dv/` contains the testbench, flash behavioral model and verification automation script.
 - `./sw/` contains all needed files to build c and assembly test cases
