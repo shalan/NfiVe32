@@ -161,6 +161,8 @@ module FLASH_READER #(parameter LINE_SIZE=128)(
     reg [23:0]  saddr;
     reg [7:0]   data [LINE_BYTES-1 : 0]; 
 
+    reg         first;
+
     wire[7:0]   EBH     = 8'heb;
     
     // for debugging
@@ -176,6 +178,11 @@ module FLASH_READER #(parameter LINE_SIZE=128)(
         endcase 
 
     always @ (posedge clk or negedge rst_n)
+        if(!rst_n) first = 1'b1;
+        else if(first & done) first <= 0;
+
+    
+    always @ (posedge clk or negedge rst_n)
         if(!rst_n) state = IDLE;
         else state <= nstate;
 
@@ -190,9 +197,11 @@ module FLASH_READER #(parameter LINE_SIZE=128)(
         else ce_n <= 1'b1;
 
     always @ (posedge clk or negedge rst_n)
-        if(!rst_n) counter <= 5'b0;
+        if(!rst_n) counter <= 8'b0;
         else if(sck & ~done) counter <= counter + 1'b1;
-        else if(state == IDLE) counter <= 5'b0;
+        else if(state == IDLE) 
+            if(first) counter <= 8'b0;
+            else counter <= 8'd8;
 
     always @ (posedge clk or negedge rst_n)
         if(!rst_n) saddr <= 24'b0;
@@ -211,8 +220,8 @@ module FLASH_READER #(parameter LINE_SIZE=128)(
                         (counter == 11)  ? saddr[11:8] :
                         (counter == 12)  ? saddr[7:4] :
                         (counter == 13)  ? saddr[3:0] :
-                        (counter == 14)  ? 4'h0 ://4'hA :
-                        (counter == 15)  ? 4'h0/*5*/ : 4'h0;    
+                        (counter == 14)  ? 4'hA ://4'hA :
+                        (counter == 15)  ? 4'h5/*5*/ : 4'h0;    
         
     assign douten   = (counter < 20);
 
