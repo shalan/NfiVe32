@@ -1,3 +1,4 @@
+*.code-workspace
 *.vvp
 *.hex
 *.elf

@@ -26,4 +26,4 @@ Area Optimized RV32IC CPU core with a single AHB-Lite master Interface for Data 
   - `DFFRFile.v` : Optional area and power optimized Register File (SKY130A)
   - `DMC_32x16HC.v` : Optional area and power optimized 32x16 direct mapped cache (SKY130A)
 ## Verification
-`test.sh` in the `./dv/` folder runs number of c test cases on the CPU core. The script reports the results of each test case as well as the average CPI.
+`test.sh` in the `./dv/` folder runs number of c test cases on the CPU core. The script reports the results of each test case as well as the average CPI. To run type : `./test.sh 2> /dev/null`. The testbench for NfiVe32 is a small SoC that contains the CPU, 64KBytes of SRAM *@ 0x20000000) and QSPI flash (@0x00000000) on AHB-Lite bus.
