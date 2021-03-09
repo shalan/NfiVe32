@@ -20,11 +20,15 @@
 */
 /*
 	Started as a One day project on May 2, 2020 by Mohamed Shalan 
-	NfiVe32 is area optimized RV32IC core with the following features:
+	NfiVe32 is area optimized RV32IMC core with the following features:
 	* Target clock frequency > 100MHz in 130nm technologies
 	* CPI ~ 3
 	* ASIC cell count: < 10K 
-		+ SKY130A (HD): ~8.5K @ CP=5.8ns (DLY3)
+		+ SKY130A (HD): 
+			+ ~8.5K @ CP=5.8ns (DLY3) - No Mul/Div Unit (RV32IC)
+			+ 18.7K @ CP=7.2ns (AX) - w/ Mul/Div Unit (RV32IMC)
+			+ Using the HC RF reduces the cells count by 3K
+		+ SKY130A (HS): (TBD)
 	* Instruction Cycles (3/4)
 	    + C0 : Fetch and Decompress, 
 	    + C1 : Fetch cyle 2; optional, only used for unaligned 32-bit instructions
@@ -39,22 +43,34 @@
 		- [X] Bus wait states
 		- [X] Some Performance counters (CYCLE and INSTRET)
 		- [X] Systick timer
-		- [] Wait for Interrupt Instruction (wfi)
-		- [] Comprehensive testing
 		- [X] Add a latch based Register File
 		- [X] Add hand-crafted ALU 
+		- [X] Wait for Interrupt Instruction (wfi)
+		- [x] Add support for the M extension (MUL/DIV Instr)
+		- [x] Add support for ISP through SWD like interface 
+		- [ ] Improve the div/mul unit area and speed
+		- [.] Add support for debugging
+		- [.] Comprehensive testing
+	
+	Issues:
+		- Reading data from the flash causes mulltiple writes to the same register.
+		  It is OK but it is better to avoid it for power efficiency.add
+		  RF write condition should be ~load_instr,C3.rf_wr + load_instr.C3.rf_wr_HREADY
+		- Make sure that HADDR has a valid calue (0) when HTRANS[1] is not 1
+		- Reduce dynamic power through registering buses w/ high activities
+
 */
 
-
-`timescale 1ns/1ps
-`default_nettype none
+`timescale          1ns/1ps
+`default_nettype    none
 
 `define		USE_RF_MODULE
-`define		USE_RF_HC
+//`define		USE_RF_HC
 //`define		USE_ALU_HC
 
 // Macros used by all modules
 `define     SYNC_BEGIN(r, v)  always @ (posedge HCLK or negedge HRESETn) if(!HRESETn) r <= v; else begin
+`define     SYNC_BEGIN_TCLK(r, v)  always @ (posedge TCLK or negedge HRESETn) if(!HRESETn) r <= v; else begin	
 `define     SYNC_END          end
 
 `define     IR_rs1          19:15
@@ -120,17 +136,15 @@
 
 
 module RV32_DECOMP	(	
-				    	input   [15:0]  IRi,
-				    	output  [31:0]  IRo
-					);
+		input	wire [15:0]  IRi,
+		output	wire [31:0]  IRo
+);
 
+	reg	[31:0]  Instout;
+	wire[15:0]  InstIn;
 
-	reg     [31:0]  Instout;
-	wire    [15:0]  InstIn;
-
-	assign  InstIn = IRi; 
-
-	assign IRo  =  Instout;
+	assign	InstIn	= 	IRi; 
+	assign	IRo		=  	Instout;
 
 	//signals used for decoding the 16bit instruction: case and if statements
 	wire [1:0] op   =   InstIn[1:0];
@@ -144,324 +158,99 @@ module RV32_DECOMP	(
 	always @(*) begin
 		Instout = 32'd0;
 	    case(op)
-	        2'b00:begin 					//C0
-	            case(fun3)
-	                3'b000:begin            //C.ADDI4SPN
-	                    //addi rd0, x2, nzuimm[9:2].
-						Instout = {	2'b00,
-									InstIn[10:7],
-									InstIn[12:11],
-									InstIn[5],
-									InstIn[6],
-									2'b00,
-									5'b00010,
-									3'b000,
-									2'b01,
-									InstIn[4:2],
-									7'b0010011
-								};
-	                end
-	                3'b010:begin            //C.LW
-	                   //lw rd',offset[6:2](rs1').
-	                    Instout = {
-	                    			5'd0,InstIn[5],
-	                    			InstIn[12:10],
-	                    			InstIn[6],
-	                    			2'b00,2'b01,
-	                    			InstIn[9:7],
-	                    			3'b010,2'b01,
-	                    			InstIn[4:2],
-	                    			7'b0000011
-	                    		};
-	                end
-	                3'b110:begin 			//C.SW
-	                    //sw rs2',offset[6:2](rs1').
-	                    Instout = {
-	                    			5'd0,InstIn[5],
-	                    			InstIn[12],
-	                    			2'b01,
-	                    			InstIn[4:2],
-	                    			2'b01,
-	                    			InstIn[9:7],
-	                    			3'b010,
-	                    			InstIn[11:10],
-	                    			InstIn[6],
-	                    			2'b00,
-	                    			7'b0100011
-	                    		};
-	                end
-	            endcase
-	        end
+	        2'b00:	// C0
+	            	case(fun3)
+	                	3'b000:	//C.ADDI4SPN ==> addi rd0, x2, nzuimm[9:2].
+							Instout = {	2'b00, InstIn[10:7], InstIn[12:11], InstIn[5], InstIn[6], 2'b00, 5'b00010, 3'b000, 2'b01, InstIn[4:2], 7'b0010011 };
+	                	3'b010:	//C.LW ==> lw rd',offset[6:2](rs1').
+	                    	Instout = { 5'd0, InstIn[5], InstIn[12:10], InstIn[6], 2'b00,2'b01, InstIn[9:7], 3'b010,2'b01, InstIn[4:2], 7'b0000011 };
+	                	3'b110:	//C.SW ==> sw rs2',offset[6:2](rs1').
+	                    	Instout = { 5'd0, InstIn[5], InstIn[12], 2'b01, InstIn[4:2], 2'b01, InstIn[9:7], 3'b010, InstIn[11:10], InstIn[6], 2'b00, 7'b0100011 };
+	            	endcase
 
-	        2'b01:begin                 //C1
-	            case(fun3)
-	                3'b000:begin            //C.ADDI
-	                	//addi rd, rd, nzimm[5:0].
-	                    Instout = {
-	                    			{6{InstIn[12]}},
-	                    			InstIn[12],
-	                    			InstIn[6:2],
-	                    			InstIn[11:7],
-	                    			3'b000,
-	                    			InstIn[11:7],
-	                    			7'b0010011
-	                    		};
-	                end
-	                3'b001:begin         //C.JAL
-	                	//jal x1, offset[11:1].
-	                    Instout = {
-	                    			InstIn[12],
-	                    			InstIn[8],
-	                    			InstIn[10:9],
-	                    			InstIn[6],
-	                    			InstIn[7],
-	                    			InstIn[2],
-	                    			InstIn[11],
-	                    			InstIn[5:3],
-	                    			InstIn[12],
-	                    			{8{InstIn[12]}},
-	                    			5'b00001,
-	                    			7'b1101111
-	                    		};
-	                end
-	                3'b010:begin            //C.LI
-	                	//addi rd, x0, imm[5:0].
-	                    Instout = {
-	                    			{6{InstIn[12]}},
-	                    			InstIn[12],
-	                    			InstIn[6:2],
-	                    			5'b00000,3'b000,
-	                    			InstIn[11:7],
-	                    			7'b0010011
-	                    		};
-	                end
-	                3'b011:begin            //C.LUI,C.ADDI16SP
-	                    case(Brs1)
-							5'b00010: begin     //C.ADDI16SP
-								//addi x2, x2, nzimm[9:4].
-								Instout = {
-											{3{InstIn[12]}},
-											InstIn[12],
-											InstIn[4:3],
-											InstIn[5],
-											InstIn[2],
-											InstIn[6],
-											4'd0,
-											Brs1,
-											3'b000,
-											Brs1,
-											7'b0010011
-										};
-							end
-	                    default: begin      //C.LUI
-	                    //lui rd, nzuimm[17:12].
-	                        Instout = {{14{InstIn[12]}},InstIn[12],InstIn[6:2],Brs1,7'b0110111};
-	                    end
-	                    endcase
-	                end
-	                3'b100:begin         //C.SRLI, C.SRAI, C.ANDI
-	                    case(fun2)
-	                    2'b00:begin     //C.SRLI
-	                    //srli rd', rd', shamt[5:0]
-	                        Instout = {7'b0000000,InstIn[6:2],2'b01,InstIn[9:7],3'b101,2'b01,InstIn[9:7],7'b0010011};
-	                    end
-	                    2'b01:begin     //C.SRAI
-	                    //srai rd', rd', shamt[5:0],
-	                        Instout = {7'b0100000,InstIn[6:2],2'b01,InstIn[9:7],3'b101,2'b01,InstIn[9:7],7'b0010011};
-	                    end
-	                    2'b10:begin     //C.ANDI
-	                    //andi rd', rd', imm[5:0].
-	                        Instout = {
-	                        			{6{InstIn[12]}},
-	                        			InstIn[12],
-	                        			InstIn[6:2],
-	                        			2'b01,
-	                        			InstIn[9:7],
-	                        			3'b111,2'b01,
-	                        			InstIn[9:7],
-	                        			7'b0010011
-	                        		};
-	                    end
-	                    2'b11:
-	                        if(!InstIn[12])begin
-	                            case(fun)
-	                                2'b11: begin    //C.AND
-	                                //and rd', rd', rs2'.
-	                                    Instout = {
-	                                    			7'b0000000,2'b01, 
-	                                    			InstIn[4:2],
-	                                    			2'b01,
-	                                    			InstIn[9:7],
-	                                    			3'b111,2'b01,
-	                                    			InstIn[9:7],
-	                                    			7'b0110011
-	                                    			};
-	                                end
-	                                2'b10: begin    //C.OR
-	                                //or rd', rd', rs2'.
-	                                    Instout = {
-	                                    			7'b0000000,2'b01, 
-	                                    			InstIn[4:2],
-	                                    			2'b01,
-	                                    			InstIn[9:7],
-	                                    			3'b110,2'b01,
-	                                    			InstIn[9:7],
-	                                    			7'b0110011
-	                                    			};
-	                                end
-	                                2'b01: begin    //C.XOR
-	                                //xor rd', rd', rs2'.
-	                                    Instout = {
-	                                    			7'b0000000,2'b01, 
-	                                    			InstIn[4:2],
-	                                    			2'b01,
-	                                    			InstIn[9:7],
-	                                    			3'b100,2'b01,
-	                                    			InstIn[9:7],
-	                                    			7'b0110011
-	                                    			};
-	                                end
-	                                2'b00: begin    //C.SUB
-	                                //sub rd', rd', rs2'.
-	                                    Instout = {7'b0100000,2'b01, InstIn[4:2],2'b01,InstIn[9:7],3'b000,2'b01,InstIn[9:7],7'b0110011};
-	                                end
+	        2'b01:	//C1
+	            	case(fun3)
+	                	3'b000: //C.ADDI ==> addi rd, rd, nzimm[5:0].
+	                    	Instout = { {6{InstIn[12]}}, InstIn[12], InstIn[6:2], InstIn[11:7], 3'b000, InstIn[11:7], 7'b0010011 };
+	                	3'b001:	//C.JAL ==> jal x1, offset[11:1].
+	                    	Instout = { InstIn[12], InstIn[8], InstIn[10:9], InstIn[6], InstIn[7], InstIn[2], InstIn[11], InstIn[5:3], InstIn[12], {8{InstIn[12]}}, 5'b00001, 7'b1101111 };
+	                	3'b010:	//C.LI ==> addi rd, x0, imm[5:0].
+	                    	Instout = { {6{InstIn[12]}}, InstIn[12], InstIn[6:2], 5'b00000, 3'b000, InstIn[11:7], 7'b0010011 };
+	                	3'b011:	//C.LUI,C.ADDI16SP
+							case(Brs1)
+								5'b00010: //C.ADDI16SP ==> addi x2, x2, nzimm[9:4].
+									Instout = { {3{InstIn[12]}}, InstIn[12], InstIn[4:3], InstIn[5], InstIn[2], InstIn[6], 4'd0, Brs1, 3'b000, Brs1, 7'b0010011 };
+								default:  //C.LUI ==> lui rd, nzuimm[17:12].
+									Instout = { {14{InstIn[12]}}, InstIn[12], InstIn[6:2], Brs1, 7'b0110111 };
+							endcase
+	                	3'b100:	//C.SRLI, C.SRAI, C.ANDI
+	                    	case(fun2)
+	                    		2'b00:	//C.SRLI ==> srli rd', rd', shamt[5:0]
+	                        		Instout = { 7'b0000000, InstIn[6:2], 2'b01, InstIn[9:7], 3'b101, 2'b01, InstIn[9:7], 7'b0010011 };
+	                    		2'b01:	//C.SRAI ==> srai rd', rd', shamt[5:0],
+	                        		Instout = { 7'b0100000, InstIn[6:2], 2'b01, InstIn[9:7], 3'b101, 2'b01, InstIn[9:7], 7'b0010011 };
+	                    		2'b10:	//C.ANDI ==> andi rd', rd', imm[5:0].
+	                        		Instout = { {6{InstIn[12]}}, InstIn[12], InstIn[6:2], 2'b01, InstIn[9:7], 3'b111,2'b01, InstIn[9:7], 7'b0010011	};
+	                    		2'b11:
+	                        		if(!InstIn[12]) begin
+										case(fun)
+											2'b11:	//C.AND ==> and rd', rd', rs2'.
+												Instout = { 7'b0000000, 2'b01, InstIn[4:2], 2'b01, InstIn[9:7], 3'b111,2'b01, InstIn[9:7], 7'b0110011 };
+											2'b10:	//C.OR ==> or rd', rd', rs2'.
+												Instout = { 7'b0000000, 2'b01, InstIn[4:2], 2'b01, InstIn[9:7], 3'b110, 2'b01, InstIn[9:7], 7'b0110011 };
+											2'b01:	//C.XOR ==> xor rd', rd', rs2'.
+												Instout = { 7'b0000000, 2'b01, InstIn[4:2], 2'b01, InstIn[9:7], 3'b100, 2'b01, InstIn[9:7], 7'b0110011 };
+											2'b00:	//C.SUB ==> sub rd', rd', rs2'.
+												Instout = { 7'b0100000, 2'b01, InstIn[4:2], 2'b01, InstIn[9:7], 3'b000, 2'b01, InstIn[9:7], 7'b0110011 };
+										endcase
+	                        		end
+	                    	endcase
+	                	3'b101:	//C.J ==> jal x0,offset[11:1].
+	                    	Instout = { InstIn[12], InstIn[8], InstIn[10:9], InstIn[6], InstIn[7], InstIn[2], InstIn[11], InstIn[5:3], InstIn[12], {8{InstIn[12]}}, 5'b00000, 7'b1101111 };
+	                	3'b110:	//C.BEQZ ==> beq rs1', x0, offset[8:1].
+	                    	Instout = { InstIn[12], {2{InstIn[12]}}, InstIn[12], InstIn[6:5], InstIn[2], 5'b00000, 2'b01, InstIn[9:7], 3'b000, InstIn[11:10], InstIn[4:3], InstIn[12], 7'b1100011 };
+	                	3'b111:	//C.BNEZ ==> bne rs1', x0, offset[8:1].
+	                    	Instout = { InstIn[12], {2{InstIn[12]}}, InstIn[12], InstIn[6:5], InstIn[2], 5'b00000, 2'b01, InstIn[9:7], 3'b001, InstIn[11:10], InstIn[4:3], InstIn[12], 7'b1100011 };
+	            	endcase
 
-	                            endcase
-	                        end
-	                    endcase
-	                end
-	                3'b101:begin         //C.J
-	                //jal x0,offset[11:1].
-	                    Instout = {
-	                    			InstIn[12],
-	                    			InstIn[8],
-	                    			InstIn[10:9],
-	                    			InstIn[6],
-	                    			InstIn[7],
-	                    			InstIn[2],
-	                    			InstIn[11],
-	                    			InstIn[5:3],
-	                    			InstIn[12],
-	                    			{8{InstIn[12]}},
-	                    			5'b00000,
-	                    			7'b1101111
-	                    		};
-	                end
-	                3'b110:begin         //C.BEQZ
-	                //beq rs1', x0, offset[8:1].
-	                    Instout = {
-	                    			InstIn[12],
-	                    			{2{InstIn[12]}},
-	                    			InstIn[12],
-	                    			InstIn[6:5],
-	                    			InstIn[2],
-	                    			5'b00000,
-	                    			2'b01,
-	                    			InstIn[9:7],
-	                    			3'b000,
-	                    			InstIn[11:10],
-	                    			InstIn[4:3],
-	                    			InstIn[12],
-	                    			7'b1100011
-	                    		};
-	                end
-
-	                3'b111:begin         //C.BNEZ
-	                //bne rs1', x0, offset[8:1].
-	                    Instout = {
-	                    			InstIn[12],
-	                    			{2{InstIn[12]}},
-	                    			InstIn[12],
-	                    			InstIn[6:5],
-	                    			InstIn[2],
-	                    			5'b00000,
-	                    			2'b01,
-	                    			InstIn[9:7],
-	                    			3'b001,
-	                    			InstIn[11:10],
-	                    			InstIn[4:3],
-	                    			InstIn[12],
-	                    			7'b1100011
-	                    		};
-	                end
-	            endcase
-	        end
-
-	        2'b10:begin                 //C2
-	            case(fun3)
-	                3'b000:begin            //C.SLLI
-	                	//slli rd, rd, shamt[5:0],.
-	                    Instout = {
-	                    			7'b0000000,
-	                    			InstIn[6:2],
-	                    			InstIn[11:7],
-	                    			3'b001,
-	                    			InstIn[11:7],
-	                    			7'b0010011
-	                    		};
-	                end
-	                3'b010:begin            //C.LWSP
-	                	//lw rd,offset[7:2](x2).
-	                    Instout = 	{
-		                    			4'd0,InstIn[3:2],
-		                    			InstIn[12],
-		                    			InstIn[6:4],
-		                    			2'b00,5'b00010,3'b010,
-		                    			InstIn[11:7],
-		                    			7'b000011
-	                    			};
-	                end
-	                3'b100:begin            //C.JR, C.JALR, C.MV, C.ADD, C.EBREAK
-	                    case(InstIn[12])
-	                        1'b0: begin
-	                            if(!Brs2) begin             //C.JR
-	                            	//jalr x0, rs1, 0.
-	                                Instout = {12'd0,Brs1,3'b000,5'b00000,7'b1100111};
-	                            end
-	                            else begin                  //C.MV
-	                            //add rd, x0, rs2.
-	                                Instout = {7'b0000000,Brs2,5'b00000,3'b000,Brs1,7'b0110011};
-	                            end
-	                        end
-	                        1'b1: begin
-	                            if(!Brs2&&!Brs1) begin      //C.EBREAK
-	                                //EBREAK
-	                                Instout = {12'd1,5'd0,3'b000,5'd0,7'b1110011};
-	                            end
-	                            else if(!Brs2) begin        //C.JALR
-	                            //jalr x1, rs1, 0.
-	                                Instout = {12'd0,Brs1,3'b000,5'b00001,7'b1100111};
-	                            end
-	                            else begin                  //C.ADD
-	                            //add rd, rd, rs2.
-	                                Instout = {7'b0000000,Brs2,Brs1,3'b000,Brs1,7'b0110011};
-	                            end
-	                        end
-	                    endcase
-	                end
-	                3'b110:begin         //C.SWSP
-	                	//sw rs2,offset[7:2](x2).
-	                    Instout = {
-	                    			4'd0,InstIn[8:7],
-	                    			InstIn[12],
-	                    			InstIn[6:2],
-	                    			5'b00010,3'b010,
-	                    			InstIn[11:9],
-	                    			2'b00,7'b0100011
-	                    		};
-	                end
-	            endcase
-	        end
+	        2'b10:	//C2
+	            	case(fun3)
+	                	3'b000:	//C.SLLI ==> slli rd, rd, shamt[5:0],.
+	                    	Instout = { 7'b0000000, InstIn[6:2], InstIn[11:7], 3'b001, InstIn[11:7], 7'b0010011 };
+	                	3'b010:	//C.LWSP ==> lw rd,offset[7:2](x2).
+	                    	Instout = {	4'd0, InstIn[3:2], InstIn[12], InstIn[6:4],	2'b00, 5'b00010, 3'b010, InstIn[11:7], 7'b000011 };	                
+	                	3'b100:	//C.JR, C.JALR, C.MV, C.ADD, C.EBREAK
+	                    	case(InstIn[12])
+								1'b0: 
+									if(!Brs2)	//C.JR ==> jalr x0, rs1, 0.
+										Instout = {12'd0,Brs1,3'b000,5'b00000,7'b1100111};
+									else		//C.MV ==> add rd, x0, rs2.
+										Instout = { 7'b0000000,Brs2,5'b00000,3'b000,Brs1,7'b0110011 };
+								1'b1: 
+									if(!Brs2&&!Brs1)	//C.EBREAK
+										Instout = { 12'd1,5'd0,3'b000,5'd0,7'b1110011 };
+									else if(!Brs2)		//C.JALR ==> jalr x1, rs1, 0.
+										Instout = { 12'd0,Brs1,3'b000,5'b00001,7'b1100111 };
+									else 				//C.ADD ==> add rd, rd, rs2.
+										Instout = { 7'b0000000,Brs2,Brs1,3'b000,Brs1,7'b0110011 };
+							endcase
+	                	3'b110:	//C.SWSP ==> sw rs2,offset[7:2](x2).
+	                    	Instout = {	4'd0,InstIn[8:7], InstIn[12], InstIn[6:2], 5'b00010,3'b010,	InstIn[11:9], 2'b00,7'b0100011 };
+					endcase
 	    endcase
 	end
 endmodule
+
 
 // The ALU and its modules
 `ifdef	USE_ALU_HC
 `include "../rtl/ALU_HC.v"
 `else
 // Mirioring Unit for the Shifter
-module mirror (input [31:0] in, output reg [31:0] out);
+module mirror (
+	input [31:0] in, 
+	output reg [31:0] out
+);
     integer i;
     always @ *
         for(i=0; i<32; i=i+1)
@@ -469,7 +258,12 @@ module mirror (input [31:0] in, output reg [31:0] out);
 endmodule
 
 // Shift Right Unit
-module shr(input [31:0] a, output [31:0] r, input [4:0] shamt, input ar);
+module shr(
+	input [31:0] a, 
+	output [31:0] r, 
+	input [4:0] shamt, 
+	input ar 
+);
 
     wire [31:0] r1, r2, r3, r4;
 
@@ -489,7 +283,7 @@ module shift(
 	input wire [1:0] typ,	// type[0] sll or srl - type[1] sra
 							// 00 : srl, 10 : sra, 01 : sll
 	output wire [31:0] r
-	);
+);
     wire [31 : 0] ma, my, y, x, sy;
 
     mirror m1(.in(a), .out(ma));
@@ -684,19 +478,19 @@ module mrdata_align(
 );
 
     wire [31:0] s_ext, u_ext;
-    wire [7:0] byte;
+    wire [7:0] b;
     wire [15:0] hword;
 
-    assign byte = 	(A==2'd0) ? d[7:0] :
+    assign b = 	(A==2'd0) ? d[7:0] :
                 	(A==2'd1) ? d[15:8] :
                 	(A==2'd2) ? d[23:16] : d[31:24];
 
     assign hword = 	(A[1]==0) ? d[15:0] : d[31:16];
 
-    assign u_ext =  (size==2'd0)  ? {24'd0,byte}  :
+    assign u_ext =  (size==2'd0)  ? {24'd0,b}  :
                     (size==2'd1)  ? {16'd0,hword} : d;
 
-    assign s_ext =  (size==2'd0)  ? {{24{byte[7]}},byte}   :
+    assign s_ext =  (size==2'd0)  ? {{24{b[7]}},b}   :
                     (size==2'd1)  ? {{24{hword[15]}},hword} : d;
 
     assign ed = sign ? u_ext : s_ext;
@@ -711,14 +505,14 @@ module mwdata_align(
     input wire [1:0] A
   );
 
-    wire [7:0] byte = d[7:0];
+    wire [7:0] b = d[7:0];
     wire [15:0] hword = d[15:0];
 
     wire [31:0] byte_word, hw_word;
 
     assign  byte_word = (A==2'd0) ? d :
-                        (A==2'd1) ? {16'd0, byte, 8'd0} :
-                        (A==2'd2) ? {8'd0, byte, 16'd0} : {byte, 24'd0} ;
+                        (A==2'd1) ? {16'd0, b, 8'd0} :
+                        (A==2'd2) ? {8'd0, b, 16'd0} : {b, 24'd0} ;
     assign  hw_word   = (~A[1])  ? d : {hword, 16'd0};
 
     assign fd = (size==2'd0) ? byte_word :
@@ -775,7 +569,7 @@ module NfiVe32_XU(
     wire [31:0] pc2         = PC + 32'h2;
     wire [31:0] pci         = PC + imm;
     wire [31:0] alu_op2     = alu_op2_src ? R2 : imm;
-    wire [4:0]  alu_shamt 	= INSTR[`IR_shamt];
+    wire [4:0]  alu_shamt 	= alu_op2[4:0];//INSTR[`IR_shamt] ;
     wire [3:0]  alu_fn;
     wire        branch_taken;
 
@@ -816,8 +610,61 @@ module NfiVe32_RF (
 		if(WR)
 			if(RW!=5'd0) begin 
 				RF[RW] <= DW;
-				#1 $display("Write: RF[%d]=0x%X []", RW, RF[RW]);
+				//#1 $display("Write: RF[%d]=0x%X []", RW, RF[RW]);
 			end
+endmodule
+
+module NfiVe_MDU (
+	input clk,
+	input rst_n,
+	input start,
+	output done,
+	input [2:0] op,
+	input mul_div,
+	input [31:0] op1, op2,
+	output [31:0] result
+);
+
+	wire [31:0] result_m, result_d;
+
+	wire done_m, done_d;
+	wire start_m, start_d;
+
+	assign result = mul_div ? result_m : result_d;
+	assign done = mul_div ? done_m : done_d;
+	assign start_m = mul_div & start;
+	assign start_d = ~mul_div & start;
+
+	div div_unit (
+		.clk(clk),
+		.rst(rst_n),
+
+		// from ex
+		.dividend_i(op1),      
+		.divisor_i(op2),       
+		.start_i(start_d),                 
+		.op_i(op),                
+		//.reg_waddr_i(reg_waddr_i), 
+
+		// to ex
+		.result_o(result_d),        
+		.ready_o(done_d)             
+		//.busy_o(busy_o),                  
+		//.reg_waddr_o(reg_waddr_o)  
+	);
+
+	mul mul_unit (
+    	.clk(clk),
+		.rst_n(rst_n),
+    	.op1(op1), 
+		.op2(op2),
+    	.op(op),
+    	.result(result_m),
+    	.done(done_m),
+    	.start(start_m)
+	);
+
+
 endmodule
 
 // The CPU Core
@@ -827,25 +674,29 @@ endmodule
 `define 	CYC_C3		2'h3
 
 
-module NfiVe32 (
-	input	HCLK,							// System clock
-	input	HRESETn,						// System Reset, active low
+module NfiVe32_CORE (
+	input					HCLK,							// System clock
+	input					HRESETn,						// System Reset, active low
 
 	// AHB-LITE MASTER PORT for Instructions
-	output wire [31:0]  HADDR,				// AHB transaction address
-	output wire [ 2:0]  HSIZE,				// AHB size: byte, half-word or word
-	output wire [ 1:0]  HTRANS,				// AHB transfer: non-sequential only
-	output wire [31:0]  HWDATA,				// AHB write-data
-	output wire         HWRITE,				// AHB write control
-	input  wire [31:0]  HRDATA,				// AHB read-data
-	input  wire         HREADY,				// AHB stall signal
+	output 	wire [31:0]		HADDR,				// AHB transaction address
+	output 	wire [ 2:0]  	HSIZE,				// AHB size: byte, half-word or word
+	output 	wire [ 1:0]  	HTRANS,				// AHB transfer: non-sequential only
+	output 	wire [31:0]  	HWDATA,				// AHB write-data
+	output 	wire         	HWRITE,				// AHB write control
+	input  	wire [31:0]  	HRDATA,				// AHB read-data
+	input  	wire         	HREADY,				// AHB stall signal
 	
 	// MISCELLANEOUS 
-  	input  wire         NMI,				// Non-maskable interrupt input
-  	input  wire         IRQ,				// Interrupt request line
-    input  wire [4:0]   IRQ_NUM,			// Interrupt number from the PIC			
-  	input  wire 	    SYSTICKCLK,			// SYSTICK clock; ON pulse width is one HCLK period
-  	output wire [31:0]	IRQ_MASK
+	input	wire			TCLK,				// Same as HCLK but does not stop; used for the SYSTICK TMR
+	output	wire			SLEEP,
+  	input  	wire         	NMI,				// Non-maskable interrupt input
+  	input  	wire         	IRQ,				// Interrupt request line
+    input  	wire [4:0]   	IRQ_NUM,			// Interrupt number from the PIC			
+  	input  	wire 	    	SYSTICKCLK,			// SYSTICK clock; ON pulse width is one HCLK period
+	output	wire			SYSTICKINT,
+  	output 	wire [31:0]		IRQ_MASK,
+	output	wire			SAFE_TO_HALT
 );
 
     reg [1:0]   CYC, NCYC;
@@ -888,7 +739,9 @@ module NfiVe32 (
     wire        C0 = (CYC==2'h0), C1 = (CYC==2'h1), C2 = (CYC==2'h2), C3 = (CYC==2'h3);
 
     wire        shamt 	    =   INSTR[`IR_shamt];
-
+	wire [6:0]	func7		=	INSTR[`IR_funct7];
+	wire [2:0]	func3		=	INSTR[`IR_funct3];
+	
     wire        instr_i     =   (INSTR[`IR_opcode] == `OPCODE_Arith_I);
 	wire        instr_r     =   (INSTR[`IR_opcode] == `OPCODE_Arith_R);
     wire        instr_lui   = 	(INSTR[`IR_opcode] == `OPCODE_LUI);
@@ -898,6 +751,8 @@ module NfiVe32 (
 	wire        instr_jal   = 	(INSTR[`IR_opcode] == `OPCODE_JAL);
     wire        instr_store = 	(INSTR[`IR_opcode] == `OPCODE_Store);
 	wire        instr_load  = 	(INSTR[`IR_opcode] == `OPCODE_Load);
+
+	wire		instr_muldiv	=	instr_r & (INSTR[`IR_funct7] == 7'b1);
 
     wire [11:0] csr_num     =   INSTR[`IR_csr]; 
     wire        instr_priv  =   (INSTR[`IR_opcode] ==  5'h1C);
@@ -912,9 +767,10 @@ module NfiVe32 (
 
     wire        exception   =   (CSR_MIE[0] & ((tmr_int & CSR_MIE[1]) | (IRQ & CSR_MIE[2]))) | NMI | instr_ecall;
     wire [31:0] pc_ex       =   instr_ecall ?   32'd12              :
+								instr_ebreak?	32'd16				:
                                 NMI         ?   32'd4               :
                                 tmr_int     ?   32'd8               :
-                                IRQ         ?   (32'd64+IRQ_NUM<<2) :   32'd60;
+                                IRQ         ?   (32'd64+(IRQ_NUM<<2)) :   32'd60;
 
 
     assign IRQ_MASK = CSR_IRQMASK;
@@ -928,7 +784,10 @@ module NfiVe32 (
 	wire [31:0] rf_dw	= 	(instr_jal | instr_jalr)    ?   PC24    : 
                             (instr_auipc)               ?   PCI     : 
                             (instr_load)                ?   hrdata  : 
-                            (instr_rdcsr)               ?   csr     :   alur;
+                            (instr_rdcsr)               ?   csr     :   
+							(instr_muldiv)				?	mul_div_r : alur;
+
+
 
 `ifdef USE_RF_MODULE
 `ifdef USE_RF_HC
@@ -954,7 +813,8 @@ module NfiVe32 (
 	always @(posedge HCLK)
 		if(rd != 5'd0)
 			if(rf_wr & C3) begin
-                $display("RF[%02d]=%X (%d)", rd, rf_dw, rf_dw);
+                //$display("RF[%02d]=0x%X (%0d) - %t", rd, rf_dw, rf_dw, $time);
+				$display("RF[%02d]=%X (%d)", rd, rf_dw, rf_dw);
 				if(rd == 10) $display("<===");
             end
 `else
@@ -969,8 +829,6 @@ module NfiVe32 (
             end
 `endif
 
-
-
     wire [31:0] csr =   (csr_num==12'hC00) ? CSR_CYCLE      :
                         (csr_num==12'hC01) ? CSR_TIME       :
                         (csr_num==12'hC02) ? CSR_INSTRET    :
@@ -979,13 +837,15 @@ module NfiVe32 (
                         (csr_num==12'h310) ? CSR_IRQMASK    :   
                         32'hBAAAAAAD;
 
-	
     assign HADDR        = ~RUN ? 32'h0 : C3 ? {PC[31:2],2'b0} : C0 ? ({PC[31:2],2'b0}+32'h4) : C2 ? alur : 32'd0;
     assign HTRANS[0]    = 1'h0;
     assign HTRANS[1]    = ~RUN | C3 | (C0 & unaligned) | (C2 & (instr_load | instr_store));
     assign HWRITE       = C2 & instr_store;
     assign HSIZE        = {1'b0,INSTR[13:12]};
     assign HWDATA       = (C3 & instr_store) ? hwdata : 32'd0;
+
+
+	assign SLEEP = C3 & instr_wfi;
 
     mrdata_align mralign(
         .d(HRDATA),
@@ -1024,6 +884,22 @@ module NfiVe32 (
         .IS32(IS32)
     );
 
+	wire [31:0] mul_div_r;
+	wire mul_div_start = C2 & instr_muldiv;
+	wire mul_div_done;
+
+	NfiVe_MDU MULDIV(
+		.clk(HCLK), 
+		.rst_n(HRESETn), 
+		.start(mul_div_start), 
+		.done(mul_div_done), 
+		.mul_div(~func3[2]), 
+		.op(func3), 
+		.op1(r1), 
+		.op2(r2), 
+		.result(mul_div_r)
+	);
+	
     // CPU Cycle
     always @*
         case (CYC)
@@ -1040,7 +916,13 @@ module NfiVe32 (
             			else 
             				NCYC = `CYC_C1;
             
-            `CYC_C2:   	NCYC = `CYC_C3;
+            `CYC_C2:   	if(instr_muldiv) begin
+							if(mul_div_done)
+								NCYC = `CYC_C3;
+							else 
+								NCYC = `CYC_C2;
+						end else 
+							NCYC = `CYC_C3;
             
             `CYC_C3:   	if(HREADY) 
             				NCYC = `CYC_C0; 
@@ -1069,7 +951,8 @@ module NfiVe32 (
     `SYNC_END
     
     `SYNC_BEGIN(INEXCEPTION, 1'h0)
-        if(exception & C3) INEXCEPTION <= 1'h1;
+        //if(exception & C3) INEXCEPTION <= 1'h1;
+		if(exception & C3 & !INEXCEPTION) INEXCEPTION <= 1'h1;
         else if(instr_mret & C3) INEXCEPTION <= 1'h0;
     `SYNC_END
     
@@ -1106,20 +989,25 @@ module NfiVe32 (
             PCI <= pci; 
     `SYNC_END
 
+	// The Program Counter (PC) Register
     `SYNC_BEGIN(PC, 32'h0)
         if(C2 & instr_mret)
             PC <= CSR_EPC;
-        else if(C2 & exception)
+        //else if(C2 & exception)
+		else if(C2 & exception & !INEXCEPTION)
             PC <= pc_ex;
-        else if(C2)    
+        else if(C2 & ~mul_div_start)    
             PC <= npc; 
+		else if(C2 & mul_div_start & mul_div_done)    
+            PC <= npc; 
+			
 		//#1 $display ("PC=%x", PC);
     `SYNC_END
 
     // Counters and Special function Registers (CSRs)
     // Retired Instruction
     `SYNC_BEGIN(CSR_INSTRET, 32'h0)
-        if(C3)    
+        if(C3 & HREADY)    
             CSR_INSTRET <= CSR_INSTRET + 32'h1;
     `SYNC_END
 
@@ -1131,9 +1019,12 @@ module NfiVe32 (
     // SYSTICK Timer
     wire    csr_time_zero   =   (CSR_TIME == 32'h0);
     assign  tmr_int         =   csr_time_zero;
+	assign	SYSTICKINT		=	tmr_int;
 
-    `SYNC_BEGIN(CSR_TIME, 32'hFFFF_FFFF)   
-        if(SYSTICKCLK)
+    `SYNC_BEGIN_TCLK(CSR_TIME, 32'hFFFF_FFFF)   
+        if(instr_wrcsr & (csr_num == 12'hC03))
+			CSR_TIME <= r1;	
+		else if(SYSTICKCLK)
             if(csr_time_zero)
                 CSR_TIME <= CSR_TIMELOAD;
             else 
@@ -1167,6 +1058,8 @@ module NfiVe32 (
             CSR_EPC <= npc;
     `SYNC_END
 
+
+	assign SAFE_TO_HALT = (~(instr_store | instr_load)) & C2;
 endmodule
 
 // A very simple Programmable Interrupts Controller
@@ -1196,27 +1089,35 @@ endmodule
 
 /* 
 	NfiVe Top Level Integration 
-	NfiVe CPU + PIC + SYSTICK 
+	NfiVe CPU + PIC + SYSTICK Timer
 */
-module NfiVe32_SYS (
+module NfiVe32_CPU (
 	input	HCLK,							// System clock
 	input	HRESETn,						// System Reset, active low
 
 	// AHB-LITE MASTER PORT for Instructions
-	output wire [31:0]  HADDR,				// AHB transaction address
-	output wire [ 2:0]  HSIZE,				// AHB size: byte, half-word or word
-	output wire [ 1:0]  HTRANS,				// AHB transfer: non-sequential only
-	output wire [31:0]  HWDATA,				// AHB write-data
-	output wire         HWRITE,				// AHB write control
-	input  wire [31:0]  HRDATA,				// AHB read-data
-	input  wire         HREADY,				// AHB stall signal
+	output 	wire [31:0]  HADDR,				// AHB transaction address
+	output 	wire [ 2:0]  HSIZE,				// AHB size: byte, half-word or word
+	output 	wire [ 1:0]  HTRANS,				// AHB transfer: non-sequential only
+	output 	wire [31:0]  HWDATA,				// AHB write-data
+	output 	wire         HWRITE,				// AHB write control
+	input	wire [31:0]  HRDATA,				// AHB read-data
+	input	wire         HREADY,				// AHB stall signal
 	
 	// MISCELLANEOUS 
-  	input  wire         NMI,				// Non-maskable interrupt input
-  	input  wire [31:0] 	IRQ,				// 32 IRQ Line
-  	input  wire [7:0]	SYSTICKCLKDIV		
+  	input	wire 		NMI,				// Non-maskable interrupt input
+  	input	wire [31:0]	IRQ,				// 32 IRQ Line
+  	input	wire [7:0]	SYSTICKCLKDIV,		// SYSTICK PRESCALER		
+	//input 	wire		HALT
+
+	// DBG Interface
+	input  wire 		SCK,
+    input  wire 		SDI,
+    output wire 		SDO,
+    output wire 		SDOE
 );
 
+	wire		HALT;
 	wire irq;
 	wire [4:0] 	irq_num;
 	wire [31:0] irq_mask;
@@ -1224,26 +1125,87 @@ module NfiVe32_SYS (
 	wire div;
 	reg  [7:0]  clkdiv;
 	reg 		systickclk;
+	wire		tmr_int;
 
-	NfiVe32 N5(
-		.HCLK(HCLK),
-		.HRESETn(HRESETn),
+	wire		sleep_req;
+
+	wire		SAFE_TO_HALT;
+
+	reg	[1:0]	cpu_state, cpu_state_next;
+	localparam RUNNING=2'b00, SLEEPING=2'b01, HALTED=2'b10;
+
+	always @(posedge HCLK or negedge HRESETn)
+		if(~HRESETn) cpu_state <= RUNNING;
+		else cpu_state <= cpu_state_next;
+
+	always @*
+		case (cpu_state)
+			RUNNING: 	if( sleep_req ) 
+							cpu_state_next = SLEEPING; 
+						else if (HALT & SAFE_TO_HALT)
+							cpu_state_next = HALTED;
+						else 
+							cpu_state_next = RUNNING; 
+			SLEEPING: 	if(irq | NMI | tmr_int) 
+							cpu_state_next = RUNNING; 
+						else 
+							cpu_state_next = SLEEPING; 
+			HALTED:		if(~HALT)
+							cpu_state_next = RUNNING; 
+						else 
+							cpu_state_next = HALTED;
+			default:	cpu_state_next = cpu_state;
+		endcase
+
+	// Clock gating for sleep mode
+	// Change for other technologies.
+	wire		GHCLK;
+	wire		clock_en = (cpu_state == 2'b00);
+
+	sky130_fd_sc_hd__dlclkp_1 CG( .CLK(HCLK), .GCLK(GHCLK), .GATE(clock_en) );
+
+	wire [31:0]  HADDR_N5;
+	wire [ 2:0]  HSIZE_N5;
+	wire [ 1:0]  HTRANS_N5;
+	wire [31:0]  HWDATA_N5;
+	wire         HWRITE_N5;
+	wire [31:0]  HRDATA_N5;
+	wire         HREADY_N5;
+
+	wire [31:0]  HADDR_TDI;
+	wire [ 2:0]  HSIZE_TDI;
+	wire [ 1:0]  HTRANS_TDI;
+	wire [31:0]  HWDATA_TDI;
+	wire         HWRITE_TDI;
+	wire [31:0]  HRDATA_TDI;
+	wire         HREADY_TDI;
+
+	wire		RSTn;
+
+	NfiVe32_CORE CORE(
+		.HCLK(GHCLK),
+		.HRESETn(HRESETn & RSTn),
 
 		// AHB-LITE MASTER PORT for Instructions and Data
-		.HADDR(HADDR),             
-		.HSIZE(HSIZE),             
-		.HTRANS(HTRANS),           
-		.HWDATA(HWDATA),           
-		.HWRITE(HWRITE),           
-		.HRDATA(HRDATA),           
-		.HREADY(HREADY),           
+		.HADDR(HADDR_N5),             
+		.HSIZE(HSIZE_N5),             
+		.HTRANS(HTRANS_N5),           
+		.HWDATA(HWDATA_N5),           
+		.HWRITE(HWRITE_N5),           
+		.HRDATA(HRDATA_N5),           
+		.HREADY(HREADY_N5),           
 		
 		// MISCELLANEOUS 
+		.TCLK(HCLK),
+		.SLEEP(sleep_req),
 	  	.NMI(NMI),               
 	  	.IRQ(irq),
 	  	.IRQ_NUM(irq_num),               
 	  	.SYSTICKCLK(systickclk),
-	  	.IRQ_MASK(irq_mask)
+		.SYSTICKINT(tmr_int),
+	  	.IRQ_MASK(irq_mask),
+
+		.SAFE_TO_HALT(SAFE_TO_HALT)
 	);
 
 	NfiVe32_PIC PIC(
@@ -1269,4 +1231,37 @@ module NfiVe32_SYS (
 				systickclk <= 1'b0;	 
 	`SYNC_END
 
+
+	TDI_AHB DBG (
+		.SCK(SCK),
+		.SDI(SDI),
+		.SDO(SDO),
+		.SDOE(SDOE),
+
+    	.HCLK(HCLK),
+		.HRESETn(HRESETn),
+
+		.HADDR(HADDR_TDI),             
+		.HSIZE(HSIZE_TDI),             
+		.HTRANS(HTRANS_TDI),           
+		.HWDATA(HWDATA_TDI),           
+		.HWRITE(HWRITE_TDI),           
+		.HRDATA(HRDATA_TDI),           
+		.HREADY(HREADY_TDI), 
+
+    	.HALT(HALT),
+		.RSTn(RSTn)
+	);
+
+	wire CPU_BUS = (cpu_state == RUNNING);
+	assign HADDR = CPU_BUS ? HADDR_N5 : HADDR_TDI;
+	assign HWDATA = CPU_BUS ? HWDATA_N5 : HWDATA_TDI;
+	assign HWRITE = CPU_BUS ? HWRITE_N5 : HWRITE_TDI;
+	assign HTRANS = CPU_BUS ? HTRANS_N5 : HTRANS_TDI;
+	assign HSIZE = CPU_BUS ? HSIZE_N5 : HSIZE_TDI;
+	assign HRDATA_TDI = HRDATA;
+	assign HRDATA_N5 = HRDATA;
+	assign HREADY_TDI = HREADY;
+	assign HREADY_N5 = HREADY;
+	
 endmodule
