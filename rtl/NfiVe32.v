@@ -1088,8 +1088,8 @@ module NfiVe32_PIC(
 endmodule
 
 /* 
-	NfiVe Top Level Integration 
-	NfiVe CPU + PIC + SYSTICK Timer
+	NfiVe 32 Top Level Integration 
+	NfiVe CPU Core + PIC + SYSTICK Timer + TDI IP
 */
 module NfiVe32_CPU (
 	input	HCLK,							// System clock
@@ -1253,15 +1253,15 @@ module NfiVe32_CPU (
 		.RSTn(RSTn)
 	);
 
-	wire CPU_BUS = (cpu_state == RUNNING);
-	assign HADDR = CPU_BUS ? HADDR_N5 : HADDR_TDI;
-	assign HWDATA = CPU_BUS ? HWDATA_N5 : HWDATA_TDI;
-	assign HWRITE = CPU_BUS ? HWRITE_N5 : HWRITE_TDI;
-	assign HTRANS = CPU_BUS ? HTRANS_N5 : HTRANS_TDI;
-	assign HSIZE = CPU_BUS ? HSIZE_N5 : HSIZE_TDI;
-	assign HRDATA_TDI = HRDATA;
-	assign HRDATA_N5 = HRDATA;
-	assign HREADY_TDI = HREADY;
-	assign HREADY_N5 = HREADY;
+	wire 	CPU_BUS = (cpu_state == RUNNING);
+	assign 	HADDR = CPU_BUS ? HADDR_N5 : HADDR_TDI;
+	assign 	HWDATA = CPU_BUS ? HWDATA_N5 : HWDATA_TDI;
+	assign 	HWRITE = CPU_BUS ? HWRITE_N5 : HWRITE_TDI;
+	assign 	HTRANS = CPU_BUS ? HTRANS_N5 : HTRANS_TDI;
+	assign 	HSIZE = CPU_BUS ? HSIZE_N5 : HSIZE_TDI;
+	assign 	HRDATA_TDI = HRDATA;
+	assign 	HRDATA_N5 = HRDATA;
+	assign 	HREADY_TDI = HREADY;
+	assign 	HREADY_N5 = HREADY;
 	
 endmodule
